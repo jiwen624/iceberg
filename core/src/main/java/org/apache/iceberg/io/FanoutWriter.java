@@ -19,11 +19,13 @@
 package org.apache.iceberg.io;
 
 import java.io.IOException;
+import java.util.Iterator;
 import java.util.Map;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.util.ExceptionUtil;
 import org.apache.iceberg.util.StructLikeMap;
 import org.apache.iceberg.util.StructLikeUtil;
 
@@ -77,13 +79,27 @@ abstract class FanoutWriter<T, R> implements PartitioningWriter<T, R> {
   }
 
   private void closeWriters() throws IOException {
+    Exception failure = null;
     for (Map<StructLike, FileWriter<T, R>> specWriters : writers.values()) {
-      for (FileWriter<T, R> writer : specWriters.values()) {
-        writer.close();
-        addResult(writer.result());
+      Iterator<FileWriter<T, R>> iterator = specWriters.values().iterator();
+      while (iterator.hasNext()) {
+        FileWriter<T, R> writer = iterator.next();
+        try {
+          writer.close();
+          addResult(writer.result());
+          iterator.remove();
+        } catch (IOException | RuntimeException e) {
+          if (failure == null) {
+            failure = e;
+          } else {
+            failure.addSuppressed(e);
+          }
+        }
       }
+    }
 
-      specWriters.clear();
+    if (failure != null) {
+      ExceptionUtil.castAndThrow(failure, IOException.class);
     }
 
     writers.clear();
